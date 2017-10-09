@@ -1,3 +1,6 @@
+# local.ch fork
+Forked repo to create a release version to upload to our nexus server.
+
 # emp-connector example
 A simplified connector example to the Enterprise Messaging Platform.
 
