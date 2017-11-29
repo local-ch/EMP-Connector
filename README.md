@@ -1,6 +1,8 @@
 # local.ch fork
 Forked repo to create a release version to upload to our nexus server.
 
+To create a new release, change the version in the pom.xml file and do a `mvn deploy` on your local machine.
+
 # emp-connector example
 A simplified connector example to the Enterprise Messaging Platform.
 
