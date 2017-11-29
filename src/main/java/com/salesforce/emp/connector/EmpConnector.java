@@ -8,10 +8,12 @@ package com.salesforce.emp.connector;
 
 import java.net.ConnectException;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
+import org.cometd.bayeux.Message;
 import org.cometd.bayeux.client.ClientSessionChannel;
 import org.cometd.client.BayeuxClient;
 import org.cometd.client.transport.LongPollingTransport;
@@ -30,9 +32,12 @@ public class EmpConnector {
 
     private class SubscriptionImpl implements TopicSubscription {
         private final String topic;
+        private final Consumer<Map<String, Object>> consumer;
 
-        private SubscriptionImpl(String topic) {
+        private SubscriptionImpl(String topic, Consumer<Map<String, Object>> consumer) {
             this.topic = topic;
+            this.consumer = consumer;
+            subscriptions.add(this);
         }
 
         /*
@@ -44,6 +49,7 @@ public class EmpConnector {
             replay.remove(topic);
             if (running.get() && client != null) {
                 client.getChannel(topic).unsubscribe();
+                subscriptions.remove(this);
             }
         }
 
@@ -69,6 +75,25 @@ public class EmpConnector {
         public String toString() {
             return String.format("Subscription [%s:%s]", getTopic(), getReplayFrom());
         }
+
+        Future<TopicSubscription> subscribe() {
+            Long replayFrom = getReplayFrom();
+            ClientSessionChannel channel = client.getChannel(topic);
+            CompletableFuture<TopicSubscription> future = new CompletableFuture<>();
+            channel.subscribe((c, message) -> consumer.accept(message.getDataAsMap()), (c, message) -> {
+                if (message.isSuccessful()) {
+                    future.complete(this);
+                } else {
+                    Object error = message.get(ERROR);
+                    if (error == null) {
+                        error = message.get(FAILURE);
+                    }
+                    future.completeExceptionally(
+                            new CannotSubscribe(parameters.endpoint(), topic, replayFrom, error != null ? error : message));
+                }
+            });
+            return future;
+        }
     }
 
     public static long REPLAY_FROM_EARLIEST = -2L;
@@ -79,32 +104,27 @@ public class EmpConnector {
 
     private volatile BayeuxClient client;
     private final HttpClient httpClient;
-    private volatile ScheduledFuture<?> keepAlive;
     private final BayeuxParameters parameters;
     private final ConcurrentMap<String, Long> replay = new ConcurrentHashMap<>();
     private final AtomicBoolean running = new AtomicBoolean();
-    private final ScheduledExecutorService scheduler;
+
+    private final Set<SubscriptionImpl> subscriptions = new CopyOnWriteArraySet<>();
+    private final Set<MessageListenerInfo> listenerInfos = new CopyOnWriteArraySet<>();
 
     public EmpConnector(BayeuxParameters parameters) {
-        this(parameters, Executors.newSingleThreadScheduledExecutor());
-    }
-
-    public EmpConnector(BayeuxParameters parameters, ScheduledExecutorService scheduler) {
         this.parameters = parameters;
         httpClient = new HttpClient(parameters.sslContextFactory());
         httpClient.getProxyConfiguration().getProxies().addAll(parameters.proxies());
-        this.scheduler = scheduler;
     }
 
     /**
-     * Start the connector
-     * 
-     * @param handshakeTimeout
-     *            - milliseconds to wait until handshake has been completed
+     * Start the connector.
      * @return true if connection was established, false otherwise
      */
     public Future<Boolean> start() {
-        if (running.compareAndSet(false, true)) { return connect(); }
+        if (running.compareAndSet(false, true)) {
+            return connect();
+        }
         CompletableFuture<Boolean> future = new CompletableFuture<Boolean>();
         future.complete(true);
         return future;
@@ -115,13 +135,10 @@ public class EmpConnector {
      */
     public void stop() {
         if (!running.compareAndSet(true, false)) { return; }
-        if (keepAlive != null) {
-            keepAlive.cancel(true);
-            keepAlive = null;
-        }
         if (client != null) {
             client.disconnect();
             client = null;
+            subscriptions.clear();
         }
         if (httpClient != null) {
             try {
@@ -134,7 +151,7 @@ public class EmpConnector {
 
     /**
      * Subscribe to a topic, receiving events after the replayFrom position
-     * 
+     *
      * @param topic
      *            - the topic to subscribe to
      * @param replayFrom
@@ -145,31 +162,24 @@ public class EmpConnector {
      *         exception
      */
     public Future<TopicSubscription> subscribe(String topic, long replayFrom, Consumer<Map<String, Object>> consumer) {
-        if (!running.get()) { throw new IllegalStateException(
-                String.format("Connector[%s} has not been started", parameters.endpoint())); }
-        if (replay.putIfAbsent(topic, replayFrom) != null) { throw new IllegalStateException(
-                String.format("Already subscribed to %s [%s]", topic, parameters.endpoint())); }
-        ClientSessionChannel channel = client.getChannel(topic);
-        SubscriptionImpl subscription = new SubscriptionImpl(topic);
-        CompletableFuture<TopicSubscription> future = new CompletableFuture<>();
-        channel.subscribe((c, message) -> consumer.accept(message.getDataAsMap()), (c, message) -> {
-            if (message.isSuccessful()) {
-                future.complete(subscription);
-            } else {
-                Object error = message.get(ERROR);
-                if (error == null) {
-                    error = message.get(FAILURE);
-                }
-                future.completeExceptionally(
-                        new CannotSubscribe(parameters.endpoint(), topic, replayFrom, error != null ? error : message));
-            }
-        });
-        return future;
+        if (!running.get()) {
+            throw new IllegalStateException(String.format("Connector[%s} has not been started",
+                    parameters.endpoint()));
+        }
+
+        if (replay.putIfAbsent(topic, replayFrom) != null) {
+            throw new IllegalStateException(String.format("Already subscribed to %s [%s]",
+                    topic, parameters.endpoint()));
+        }
+
+        SubscriptionImpl subscription = new SubscriptionImpl(topic, consumer);
+
+        return subscription.subscribe();
     }
 
     /**
      * Subscribe to a topic, receiving events from the earliest event position in the stream
-     * 
+     *
      * @param topic
      *            - the topic to subscribe to
      * @param consumer
@@ -183,7 +193,7 @@ public class EmpConnector {
 
     /**
      * Subscribe to a topic, receiving events from the latest event position in the stream
-     * 
+     *
      * @param topic
      *            - the topic to subscribe to
      * @param consumer
@@ -195,8 +205,29 @@ public class EmpConnector {
         return subscribe(topic, REPLAY_FROM_TIP, consumer);
     }
 
+    public EmpConnector addListener(String channel, ClientSessionChannel.MessageListener messageListener) {
+        listenerInfos.add(new MessageListenerInfo(channel, messageListener));
+        return this;
+    }
+
+    public boolean isConnected() {
+        return client != null && client.isConnected();
+    }
+
+    public boolean isDisconnected() {
+        return client != null && client.isDisconnected();
+    }
+
+    public boolean isHandshook() {
+        return client != null && client.isHandshook();
+    }
+
+    public long getLastReplayId(String topic) {
+        return replay.get(topic);
+    }
+
     private Future<Boolean> connect() {
-        CompletableFuture<Boolean> future = new CompletableFuture<Boolean>();
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
         replay.clear();
         try {
             httpClient.start();
@@ -206,14 +237,20 @@ public class EmpConnector {
             future.complete(false);
             return future;
         }
+
         LongPollingTransport httpTransport = new LongPollingTransport(parameters.longPollingOptions(), httpClient) {
             @Override
             protected void customize(Request request) {
                 request.header(AUTHORIZATION, parameters.bearerToken());
             }
         };
+
         client = new BayeuxClient(parameters.endpoint().toExternalForm(), httpTransport);
+
         client.addExtension(new ReplayExtension(replay));
+
+        addListeners(client);
+
         client.handshake((c, m) -> {
             if (!m.isSuccessful()) {
                 Object error = m.get(ERROR);
@@ -224,16 +261,36 @@ public class EmpConnector {
                         String.format("Cannot connect [%s] : %s", parameters.endpoint(), error)));
                 running.set(false);
             } else {
-                keepAlive = scheduler.scheduleAtFixedRate(() -> {
-                    if (running.get()) {
-                        client.handshake();
-                    }
-                }, parameters.keepAlive(), parameters.keepAlive(), parameters.keepAliveUnit());
+                subscriptions.forEach(SubscriptionImpl::subscribe);
                 future.complete(true);
             }
         });
 
         return future;
+    }
+
+    private void addListeners(BayeuxClient client) {
+        for (MessageListenerInfo info : listenerInfos) {
+            client.getChannel(info.getChannelName()).addListener(info.getMessageListener());
+        }
+    }
+
+    private static class MessageListenerInfo {
+        private String channelName;
+        private ClientSessionChannel.MessageListener messageListener;
+
+        MessageListenerInfo(String channelName, ClientSessionChannel.MessageListener messageListener) {
+            this.channelName = channelName;
+            this.messageListener = messageListener;
+        }
+
+        String getChannelName() {
+            return channelName;
+        }
+
+        ClientSessionChannel.MessageListener getMessageListener() {
+            return messageListener;
+        }
     }
 
     public boolean isDisconnected() {
