@@ -9,11 +9,14 @@ package com.salesforce.emp.connector;
 import java.net.ConnectException;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArraySet;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-import org.cometd.bayeux.Message;
 import org.cometd.bayeux.client.ClientSessionChannel;
 import org.cometd.client.BayeuxClient;
 import org.cometd.client.transport.LongPollingTransport;
@@ -291,17 +294,5 @@ public class EmpConnector {
         ClientSessionChannel.MessageListener getMessageListener() {
             return messageListener;
         }
-    }
-
-    public boolean isDisconnected() {
-        return client.isDisconnected();
-    }
-
-    public boolean isConnected() {
-        return client.isConnected();
-    }
-
-    public boolean isHandshook() {
-        return client.isHandshook();
     }
 }
