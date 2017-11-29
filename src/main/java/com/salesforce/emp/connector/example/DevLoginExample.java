@@ -6,7 +6,6 @@
  */
 package com.salesforce.emp.connector.example;
 
-import static com.salesforce.emp.connector.LoginHelper.login;
 
 import java.net.URL;
 import java.util.Map;
@@ -15,6 +14,7 @@ import java.util.function.Consumer;
 
 import com.salesforce.emp.connector.BayeuxParameters;
 import com.salesforce.emp.connector.EmpConnector;
+import com.salesforce.emp.connector.LoginBayeuxParametersProvider;
 import com.salesforce.emp.connector.TopicSubscription;
 
 /**
@@ -30,8 +30,9 @@ public class DevLoginExample {
             System.exit(1);
         }
         Consumer<Map<String, Object>> consumer = event -> System.out.println(String.format("Received:\n%s", event));
-        BayeuxParameters params = login(new URL(argv[0]), argv[1], argv[2]);
-        EmpConnector connector = new EmpConnector(params);
+        LoginBayeuxParametersProvider paramsProvider = new LoginBayeuxParametersProvider(new URL(argv[0]), argv[1], argv[2]);
+        paramsProvider.login();
+        EmpConnector connector = new EmpConnector(paramsProvider);
 
         connector.start().get(5, TimeUnit.SECONDS);
 

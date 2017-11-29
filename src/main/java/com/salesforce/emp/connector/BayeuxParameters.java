@@ -26,7 +26,7 @@ public interface BayeuxParameters {
      * @return the URL of the platform Streaming API endpoint
      */
     default URL endpoint() {
-        String path = new StringBuilder().append(LoginHelper.COMETD_REPLAY).append(version()).toString();
+        String path = new StringBuilder().append(LoginBayeuxParametersProvider.COMETD_REPLAY).append(version()).toString();
         try {
             return new URL(host(), path);
         } catch (MalformedURLException e) {
@@ -37,9 +37,9 @@ public interface BayeuxParameters {
 
     default URL host() {
         try {
-            return new URL(LoginHelper.LOGIN_ENDPOINT);
+            return new URL(LoginBayeuxParametersProvider.LOGIN_ENDPOINT);
         } catch (MalformedURLException e) {
-            throw new IllegalStateException(String.format("Unable to form URL for %s", LoginHelper.LOGIN_ENDPOINT));
+            throw new IllegalStateException(String.format("Unable to form URL for %s", LoginBayeuxParametersProvider.LOGIN_ENDPOINT));
         }
     }
 

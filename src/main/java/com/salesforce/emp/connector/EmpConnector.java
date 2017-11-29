@@ -13,7 +13,6 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
-import org.cometd.bayeux.Message;
 import org.cometd.bayeux.client.ClientSessionChannel;
 import org.cometd.client.BayeuxClient;
 import org.cometd.client.transport.LongPollingTransport;
@@ -89,7 +88,7 @@ public class EmpConnector {
                         error = message.get(FAILURE);
                     }
                     future.completeExceptionally(
-                            new CannotSubscribe(parameters.endpoint(), topic, replayFrom, error != null ? error : message));
+                            new CannotSubscribe(paramsProvider.params().endpoint(), topic, replayFrom, error != null ? error : message));
                 }
             });
             return future;
@@ -104,17 +103,17 @@ public class EmpConnector {
 
     private volatile BayeuxClient client;
     private final HttpClient httpClient;
-    private final BayeuxParameters parameters;
+    private final BayeuxParametersProvider paramsProvider;
     private final ConcurrentMap<String, Long> replay = new ConcurrentHashMap<>();
     private final AtomicBoolean running = new AtomicBoolean();
 
     private final Set<SubscriptionImpl> subscriptions = new CopyOnWriteArraySet<>();
     private final Set<MessageListenerInfo> listenerInfos = new CopyOnWriteArraySet<>();
 
-    public EmpConnector(BayeuxParameters parameters) {
-        this.parameters = parameters;
-        httpClient = new HttpClient(parameters.sslContextFactory());
-        httpClient.getProxyConfiguration().getProxies().addAll(parameters.proxies());
+    public EmpConnector(BayeuxParametersProvider paramsProvider) {
+        this.paramsProvider = paramsProvider;
+        httpClient = new HttpClient(this.paramsProvider.params().sslContextFactory());
+        httpClient.getProxyConfiguration().getProxies().addAll(this.paramsProvider.params().proxies());
     }
 
     /**
@@ -144,7 +143,7 @@ public class EmpConnector {
             try {
                 httpClient.stop();
             } catch (Exception e) {
-                log.error("Unable to stop HTTP transport[{}]", parameters.endpoint(), e);
+                log.error("Unable to stop HTTP transport[{}]", paramsProvider.params().endpoint(), e);
             }
         }
     }
@@ -164,12 +163,12 @@ public class EmpConnector {
     public Future<TopicSubscription> subscribe(String topic, long replayFrom, Consumer<Map<String, Object>> consumer) {
         if (!running.get()) {
             throw new IllegalStateException(String.format("Connector[%s} has not been started",
-                    parameters.endpoint()));
+                    paramsProvider.params().endpoint()));
         }
 
         if (replay.putIfAbsent(topic, replayFrom) != null) {
             throw new IllegalStateException(String.format("Already subscribed to %s [%s]",
-                    topic, parameters.endpoint()));
+                    topic, paramsProvider.params().endpoint()));
         }
 
         SubscriptionImpl subscription = new SubscriptionImpl(topic, consumer);
@@ -232,20 +231,20 @@ public class EmpConnector {
         try {
             httpClient.start();
         } catch (Exception e) {
-            log.error("Unable to start HTTP transport[{}]", parameters.endpoint(), e);
+            log.error("Unable to start HTTP transport[{}]", paramsProvider.params().endpoint(), e);
             running.set(false);
             future.complete(false);
             return future;
         }
 
-        LongPollingTransport httpTransport = new LongPollingTransport(parameters.longPollingOptions(), httpClient) {
+        LongPollingTransport httpTransport = new LongPollingTransport(paramsProvider.params().longPollingOptions(), httpClient) {
             @Override
             protected void customize(Request request) {
-                request.header(AUTHORIZATION, parameters.bearerToken());
+                request.header(AUTHORIZATION, paramsProvider.params().bearerToken());
             }
         };
 
-        client = new BayeuxClient(parameters.endpoint().toExternalForm(), httpTransport);
+        client = new BayeuxClient(paramsProvider.params().endpoint().toExternalForm(), httpTransport);
 
         client.addExtension(new ReplayExtension(replay));
 
@@ -258,7 +257,7 @@ public class EmpConnector {
                     error = m.get(FAILURE);
                 }
                 future.completeExceptionally(new ConnectException(
-                        String.format("Cannot connect [%s] : %s", parameters.endpoint(), error)));
+                        String.format("Cannot connect [%s] : %s", paramsProvider.params().endpoint(), error)));
                 running.set(false);
             } else {
                 subscriptions.forEach(SubscriptionImpl::subscribe);

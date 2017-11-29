@@ -26,7 +26,7 @@ import org.xml.sax.helpers.DefaultHandler;
  * @author hal.hildebrand
  * @since 202
  */
-public class LoginHelper {
+public class LoginBayeuxParametersProvider implements BayeuxParametersProvider {
 
     private static class LoginResponseParser extends DefaultHandler {
 
@@ -88,32 +88,47 @@ public class LoginHelper {
     // The enterprise SOAP API endpoint used for the login call
     private static final String SERVICES_SOAP_PARTNER_ENDPOINT = "/services/Soap/u/22.0/";
 
-    public static BayeuxParameters login(String username, String password) throws Exception {
-        return login(new URL(LOGIN_ENDPOINT), username, password);
+    private final URL loginEndpoint;
+    private final String username;
+    private final String password;
+    private final BayeuxParameters initialParams;
+
+    private BayeuxParameters params;
+
+    private static final BayeuxParameters DEFAULT_PARAMS = new BayeuxParameters() {
+        @Override
+        public String bearerToken() {
+            throw new IllegalStateException("Have not authenticated");
+        }
+
+        @Override
+        public URL endpoint() {
+            throw new IllegalStateException("Have not established replay endpoint");
+        }
+    };
+
+    public LoginBayeuxParametersProvider(String username, String password) throws Exception {
+        this(new URL(LOGIN_ENDPOINT), username, password);
     }
 
-    public static BayeuxParameters login(String username, String password, BayeuxParameters params) throws Exception {
-        return login(new URL(LOGIN_ENDPOINT), username, password, params);
+    public LoginBayeuxParametersProvider(String username, String password, BayeuxParameters params) throws Exception {
+        this(new URL(LOGIN_ENDPOINT), username, password, params);
     }
 
-    public static BayeuxParameters login(URL loginEndpoint, String username, String password) throws Exception {
-        return login(loginEndpoint, username, password, new BayeuxParameters() {
-            @Override
-            public String bearerToken() {
-                throw new IllegalStateException("Have not authenticated");
-            }
-
-            @Override
-            public URL endpoint() {
-                throw new IllegalStateException("Have not established replay endpoint");
-            }
-        });
+    public LoginBayeuxParametersProvider(URL loginEndpoint, String username, String password) throws Exception {
+        this(loginEndpoint, username, password, DEFAULT_PARAMS);
     }
 
-    public static BayeuxParameters login(URL loginEndpoint, String username, String password,
-            BayeuxParameters parameters) throws Exception {
-        HttpClient client = new HttpClient(parameters.sslContextFactory());
-        client.getProxyConfiguration().getProxies().addAll(parameters.proxies());
+    public LoginBayeuxParametersProvider(URL loginEndpoint, String username, String password, BayeuxParameters initialParams) {
+        this.loginEndpoint = loginEndpoint;
+        this.username = username;
+        this.password = password;
+        this.initialParams = initialParams;
+    }
+
+    public void login() throws Exception {
+        HttpClient client = new HttpClient(params.sslContextFactory());
+        client.getProxyConfiguration().getProxies().addAll(params.proxies());
         client.start();
         URL endpoint = new URL(loginEndpoint, getSoapUri());
         Request post = client.POST(endpoint.toURI());
@@ -137,10 +152,11 @@ public class LoginHelper {
                 String.format("Unable to login: %s", parser.faultstring)); }
 
         URL soapEndpoint = new URL(parser.serverUrl);
-        String cometdEndpoint = Float.parseFloat(parameters.version()) < 37 ? COMETD_REPLAY_OLD : COMETD_REPLAY;
+        String cometdEndpoint = Float.parseFloat(params.version()) < 37 ? COMETD_REPLAY_OLD : COMETD_REPLAY;
         URL replayEndpoint = new URL(soapEndpoint.getProtocol(), soapEndpoint.getHost(), soapEndpoint.getPort(),
-                new StringBuilder().append(cometdEndpoint).append(parameters.version()).toString());
-        return new DelegatingBayeuxParameters(parameters) {
+                new StringBuilder().append(cometdEndpoint).append(params.version()).toString());
+
+        this.params = new DelegatingBayeuxParameters(params) {
             @Override
             public String bearerToken() {
                 return sessionId;
@@ -160,5 +176,10 @@ public class LoginHelper {
     private static byte[] soapXmlForLogin(String username, String password) throws UnsupportedEncodingException {
         return (ENV_START + "  <urn:login>" + "    <urn:username>" + username + "</urn:username>" + "    <urn:password>"
                 + password + "</urn:password>" + "  </urn:login>" + ENV_END).getBytes("UTF-8");
+    }
+
+    @Override
+    public BayeuxParameters params() {
+        return this.params;
     }
 }
