@@ -15,6 +15,7 @@ import java.util.function.Consumer;
 
 import com.salesforce.emp.connector.BayeuxParameters;
 import com.salesforce.emp.connector.EmpConnector;
+import com.salesforce.emp.connector.LoginAwareBayeuxParameters;
 import com.salesforce.emp.connector.TopicSubscription;
 
 /**
@@ -30,8 +31,10 @@ public class DevLoginExample {
             System.exit(1);
         }
         Consumer<Map<String, Object>> consumer = event -> System.out.println(String.format("Received:\n%s", event));
-        BayeuxParameters params = login(new URL(argv[0]), argv[1], argv[2]);
-        EmpConnector connector = new EmpConnector(params);
+        LoginAwareBayeuxParameters loginAwareBayeuxParameters =
+                new LoginAwareBayeuxParameters(new URL(argv[0]), argv[1], argv[2]);
+        loginAwareBayeuxParameters.login();
+        EmpConnector connector = new EmpConnector(loginAwareBayeuxParameters);
 
         connector.start().get(5, TimeUnit.SECONDS);
 

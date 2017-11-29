@@ -8,12 +8,14 @@ package com.salesforce.emp.connector.example;
 
 import static com.salesforce.emp.connector.LoginHelper.login;
 
+import java.net.URL;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 
 import com.salesforce.emp.connector.BayeuxParameters;
 import com.salesforce.emp.connector.EmpConnector;
+import com.salesforce.emp.connector.LoginAwareBayeuxParameters;
 import com.salesforce.emp.connector.TopicSubscription;
 
 /**
@@ -33,9 +35,9 @@ public class LoginExample {
             replayFrom = Long.parseLong(argv[3]);
         }
 
-        BayeuxParameters params;
+        LoginAwareBayeuxParameters loginAwareBayeuxParameters = new LoginAwareBayeuxParameters(argv[0], argv[1]);
         try {
-            params = login(argv[0], argv[1]);
+            loginAwareBayeuxParameters.login();
         } catch (Exception e) {
             e.printStackTrace(System.err);
             System.exit(1);
@@ -43,7 +45,7 @@ public class LoginExample {
         } 
 
         Consumer<Map<String, Object>> consumer = event -> System.out.println(String.format("Received:\n%s", event));
-        EmpConnector connector = new EmpConnector(params);
+        EmpConnector connector = new EmpConnector(loginAwareBayeuxParameters);
 
         connector.start().get(5, TimeUnit.SECONDS);
 

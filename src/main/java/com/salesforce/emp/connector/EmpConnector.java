@@ -13,6 +13,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
+import org.cometd.bayeux.Channel;
 import org.cometd.bayeux.Message;
 import org.cometd.bayeux.client.ClientSessionChannel;
 import org.cometd.client.BayeuxClient;
@@ -84,10 +85,7 @@ public class EmpConnector {
                 if (message.isSuccessful()) {
                     future.complete(this);
                 } else {
-                    Object error = message.get(ERROR);
-                    if (error == null) {
-                        error = message.get(FAILURE);
-                    }
+                    Object error = errorFromMessage(message);
                     future.completeExceptionally(
                             new CannotSubscribe(parameters.endpoint(), topic, replayFrom, error != null ? error : message));
                 }
@@ -249,16 +247,31 @@ public class EmpConnector {
 
         client.addExtension(new ReplayExtension(replay));
 
+        if (parameters instanceof LoginAwareBayeuxParameters) {
+            addListener(Channel.META_HANDSHAKE, (channel, message) -> {
+                if (!message.isSuccessful() && ((String)message.get(Message.ERROR_FIELD)).startsWith("403::")) {
+                    try {
+                        ((LoginAwareBayeuxParameters) parameters).login();
+                        client.handshake((c, m) -> {
+                            if (!m.isSuccessful()) {
+                                stop();
+                                new ConnectException(
+                                        String.format("Cannot connect [%s] : %s", parameters.endpoint(), errorFromMessage(m)));
+                            }
+                        });
+                    } catch (Exception e) {
+                        throw new RuntimeException("Error during login", e);
+                    }
+                }
+            });
+        }
+
         addListeners(client);
 
         client.handshake((c, m) -> {
             if (!m.isSuccessful()) {
-                Object error = m.get(ERROR);
-                if (error == null) {
-                    error = m.get(FAILURE);
-                }
                 future.completeExceptionally(new ConnectException(
-                        String.format("Cannot connect [%s] : %s", parameters.endpoint(), error)));
+                        String.format("Cannot connect [%s] : %s", parameters.endpoint(), errorFromMessage(m))));
                 running.set(false);
             } else {
                 subscriptions.forEach(SubscriptionImpl::subscribe);
@@ -267,6 +280,14 @@ public class EmpConnector {
         });
 
         return future;
+    }
+
+    private static Object errorFromMessage(Message m) {
+        Object error = m.get(ERROR);
+        if (error == null) {
+            error = m.get(FAILURE);
+        }
+        return error;
     }
 
     private void addListeners(BayeuxClient client) {
